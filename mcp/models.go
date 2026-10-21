@@ -59,6 +59,13 @@ type GetLoggerLevelsRequest struct {
 	LoggerName string `json:"loggerName,omitempty" jsonschema:"description=Optional specific logger module name"`
 }
 
+type SetLoggerLevelRequest struct {
+	PodName    string `json:"podName,omitempty" jsonschema:"description=Target daemon pod name (auto-discovered if empty)"`
+	Namespace  string `json:"namespace,omitempty" jsonschema:"description=Target daemon pod namespace (default: kmesh-system)"`
+	LoggerName string `json:"loggerName" jsonschema:"description=Logger module name,required"`
+	Level      string `json:"level" jsonschema:"description=New log level (e.g. debug, info, warn, error),required"`
+}
+
 type ListDaemonPodsRequest struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"description=Namespace where Kmesh is running (default: kmesh-system)"`
 }

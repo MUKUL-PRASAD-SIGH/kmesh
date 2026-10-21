@@ -17,12 +17,14 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -34,6 +36,12 @@ import (
 	"kmesh.net/kmesh/pkg/constants"
 	"kmesh.net/kmesh/pkg/kube"
 )
+
+// loggerInfo is the request body accepted by the daemon's /debug/loggers endpoint.
+type loggerInfo struct {
+	Name  string `json:"name"`
+	Level string `json:"level"`
+}
 
 // McpHandler holds the Kubernetes CLI Client to safely tunnel connections.
 type McpHandler struct {
@@ -72,6 +80,13 @@ func (h *McpHandler) getDefaultDaemonPod(ctx context.Context, namespace string) 
 // fetchFromDaemon sets up a secure port-forward to the target daemon pod
 // and fetches data from the given endpoint (port 15200).
 func (h *McpHandler) fetchFromDaemon(ctx context.Context, podName, namespace, endpoint string) ([]byte, error) {
+	return h.requestDaemon(ctx, podName, namespace, http.MethodGet, endpoint, nil)
+}
+
+// requestDaemon sets up a secure port-forward to the target daemon pod and
+// sends an HTTP request with the given method and optional JSON body to the
+// given endpoint (port 15200).
+func (h *McpHandler) requestDaemon(ctx context.Context, podName, namespace, method, endpoint string, body []byte) ([]byte, error) {
 	if namespace == "" {
 		namespace = "kmesh-system"
 	}
@@ -108,9 +123,12 @@ func (h *McpHandler) fetchFromDaemon(ctx context.Context, podName, namespace, en
 	defer fw.Close()
 
 	url := fmt.Sprintf("http://%s/%s", fw.Address(), endpoint)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -119,11 +137,18 @@ func (h *McpHandler) fetchFromDaemon(ctx context.Context, podName, namespace, en
 	}
 	defer resp.Body.Close()
 
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read daemon response: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
+		if msg := strings.TrimSpace(string(respBody)); msg != "" {
+			return nil, fmt.Errorf("daemon returned status %d: %s", resp.StatusCode, msg)
+		}
 		return nil, fmt.Errorf("daemon returned status %d", resp.StatusCode)
 	}
 
-	return io.ReadAll(resp.Body)
+	return respBody, nil
 }
 
 func condenseJsonDump(raw []byte, maxSize int) string {
@@ -228,6 +253,28 @@ func (h *McpHandler) HandleGetLoggerLevels(ctx context.Context, req mcp.CallTool
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	return mcp.NewToolResultText(string(raw)), nil
+}
+
+func (h *McpHandler) HandleSetLoggerLevel(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	podName := req.GetString("podName", "")
+	namespace := req.GetString("namespace", "kmesh-system")
+	loggerName, err := req.RequireString("loggerName")
+	if err != nil {
+		return mcp.NewToolResultError("loggerName argument is required"), nil
+	}
+	level, err := req.RequireString("level")
+	if err != nil {
+		return mcp.NewToolResultError("level argument is required"), nil
+	}
+
+	body, err := json.Marshal(loggerInfo{Name: loggerName, Level: level})
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to encode request: %v", err)), nil
+	}
+	if _, err := h.requestDaemon(ctx, podName, namespace, http.MethodPost, "debug/loggers", body); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to set log level: %v", err)), nil
+	}
+	return mcp.NewToolResultText(fmt.Sprintf("Logger %q level set to %q", loggerName, level)), nil
 }
 
 func (h *McpHandler) HandleListDaemonPods(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

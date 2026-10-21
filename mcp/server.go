@@ -92,6 +92,15 @@ func RegisterToolsAndServe(cliClient kube.CLIClient) {
 	)
 	mcpServer.AddTool(toolLoggerLevels, handler.HandleGetLoggerLevels)
 
+	toolSetLoggerLevel := mcp.NewTool("set_logger_level",
+		mcp.WithDescription("Sets the log level of a Kmesh internal logger (e.g. default, fileOnly, bpf). Use get_logger_levels to list loggers and restore the previous level when done"),
+		mcp.WithString("podName", mcp.Description("Target daemon pod name (auto-discovered if empty)")),
+		mcp.WithString("namespace", mcp.Description("Target daemon pod namespace (default: kmesh-system)")),
+		mcp.WithString("loggerName", mcp.Required(), mcp.Description("Logger module name")),
+		mcp.WithString("level", mcp.Required(), mcp.Description("New log level (e.g. debug, info, warn, error)")),
+	)
+	mcpServer.AddTool(toolSetLoggerLevel, handler.HandleSetLoggerLevel)
+
 	toolListDaemonPods := mcp.NewTool("list_daemon_pods",
 		mcp.WithDescription("Lists all kmesh-daemon pods, their nodes, and IPs"),
 		mcp.WithString("namespace", mcp.Description("Namespace where Kmesh is running (default: kmesh-system)")),

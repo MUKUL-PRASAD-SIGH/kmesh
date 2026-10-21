@@ -18,6 +18,7 @@ package mcp
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -261,4 +262,43 @@ func TestWaypointHandlers(t *testing.T) {
 	res, err = h.HandleGetWaypointStatus(context.Background(), newToolRequest(nil))
 	require.NoError(t, err)
 	assert.True(t, res.IsError, "name is required")
+}
+
+func TestHandleSetLoggerLevel(t *testing.T) {
+	var gotMethod, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotMethod, gotBody = r.Method, string(body)
+		if r.URL.Path != "/debug/loggers" {
+			http.NotFound(w, r)
+			return
+		}
+		if !strings.Contains(gotBody, `"level":"debug"`) {
+			http.Error(w, "unrecognized level", http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte("OK"))
+	}))
+	defer srv.Close()
+
+	cs := kubefake.NewSimpleClientset(daemonPod("kmesh-a", "node-a", true))
+	h := &McpHandler{cliClient: &fakeCLIClient{kubeClient: cs, daemonAddr: strings.TrimPrefix(srv.URL, "http://")}}
+
+	res, err := h.HandleSetLoggerLevel(context.Background(), newToolRequest(map[string]any{"loggerName": "default", "level": "debug"}))
+	require.NoError(t, err)
+	assert.False(t, res.IsError)
+	assert.Equal(t, http.MethodPost, gotMethod)
+	assert.JSONEq(t, `{"name":"default","level":"debug"}`, gotBody)
+	assert.Contains(t, resultText(t, res), `"default"`)
+
+	res, err = h.HandleSetLoggerLevel(context.Background(), newToolRequest(map[string]any{"loggerName": "default", "level": "loud"}))
+	require.NoError(t, err)
+	assert.True(t, res.IsError)
+	assert.Contains(t, resultText(t, res), "unrecognized level", "daemon error body should reach the caller")
+
+	for _, args := range []map[string]any{{"level": "debug"}, {"loggerName": "default"}} {
+		res, err = h.HandleSetLoggerLevel(context.Background(), newToolRequest(args))
+		require.NoError(t, err)
+		assert.True(t, res.IsError, "loggerName and level are required")
+	}
 }
